@@ -15,7 +15,7 @@ export function renderMusicLoop({
   loopParts,
   loopSampleCount,
   loopSampleRate,
-}: RenderMusicLoopApi): Uint8Array {
+}: RenderMusicLoopApi): Uint8Array<ArrayBuffer> {
   const headerSize = 56;
   const dataSize = loopSampleCount * 4;
   const wavBuffer = new Uint8Array(headerSize + dataSize);

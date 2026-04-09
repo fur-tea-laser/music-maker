@@ -1,12 +1,8 @@
-import { useState, useRef } from "preact/hooks";
+import { useState } from "preact/hooks";
 import { MusicPart, renderMusicLoop } from "../audio/renderMusicLoop.ts";
+import { playLoop, stopLoop } from "../audio/audioEngine.ts";
 import styles from "../styles/App.module.scss";
-
-interface MusicPartsState {
-  [key: number]: MusicPart;
-}
-
-const initialMusicParts: MusicPartsState = {
+const initialMusicParts: Record<number, MusicPart> = {
   1: {
     partId: 1,
     partStart: 0,
@@ -20,12 +16,12 @@ const initialMusicParts: MusicPartsState = {
     partSampleSource: "(t, rt) => Math.sin(t * 2 * Math.PI * 880) * 0.1",
   },
 };
-
 export const App = () => {
-  const [musicParts, setMusicParts] = useState<MusicPartsState>(initialMusicParts);
-  const audioRef = useRef<HTMLAudioElement>(null);
+  const [currentLoopParts, setLoopParts] = useState<Record<number, MusicPart>>(initialMusicParts);
+  const [loopLengthSeconds, setLoopLengthSeconds] = useState<number>(2);
+  const [loopSampleRate, setLoopSampleRate] = useState<number>(44100);
   const handlePartChange = (partId: number, fieldName: keyof MusicPart, fieldValue: string | number) => {
-    setMusicParts((previousParts) => ({
+    setLoopParts((previousParts) => ({
       ...previousParts,
       [partId]: {
         ...previousParts[partId],
@@ -34,36 +30,58 @@ export const App = () => {
     }));
   };
   const handlePlayClick = () => {
-    const loopSampleRate = 44100;
-    const loopSampleCount = loopSampleRate * 2;
-    const resultWav = renderMusicLoop({
-      loopParts: musicParts,
+    const loopSampleCount = Math.floor(loopSampleRate * loopLengthSeconds);
+    const loopWav = renderMusicLoop({
       loopSampleCount,
       loopSampleRate,
+      loopParts: currentLoopParts,
     });
-    const audioBlob = new Blob([resultWav], { type: "audio/wav" });
-    const audioUrl = URL.createObjectURL(audioBlob);
-    if (audioRef.current) {
-      audioRef.current.src = audioUrl;
-      audioRef.current.play();
-    }
+    playLoop({ apiData: loopWav.buffer });
+  };
+  const handleStopClick = () => {
+    stopLoop();
   };
   return (
     <div class={styles.container}>
       <h1 class={styles.headerTitle}>Music Loop Editor</h1>
+      <div class={styles.settingsSection}>
+        <div class={styles.settingItem}>
+          <label class={styles.settingLabel}>Loop Length (seconds)</label>
+          <input
+            type="number"
+            step="0.1"
+            min="0.1"
+            value={loopLengthSeconds}
+            onChange={(event) => setLoopLengthSeconds(parseFloat((event.target as HTMLInputElement).value))}
+            class={styles.settingInput}
+          />
+        </div>
+        <div class={styles.settingItem}>
+          <label class={styles.settingLabel}>Sample Rate (Hz)</label>
+          <select
+            value={loopSampleRate}
+            onChange={(event) => setLoopSampleRate(parseInt((event.target as HTMLSelectElement).value))}
+            class={styles.settingSelect}
+          >
+            <option value={44100}>44100</option>
+            <option value={96000}>96000</option>
+            <option value={192000}>192000</option>
+          </select>
+        </div>
+      </div>
       <div class={styles.partsList}>
-        {Object.values(musicParts).map((musicPart) => (
-          <div key={musicPart.partId} class={styles.partItem}>
+        {Object.values(currentLoopParts).map((someLoopPart) => (
+          <div key={someLoopPart.partId} class={styles.partItem}>
             <div class={styles.partHeader}>
-              <span class={styles.partIdLabel}>Part {musicPart.partId}</span>
+              <span class={styles.partIdLabel}>Part {someLoopPart.partId}</span>
               <div class={styles.rangeInputs}>
                 <input
                   type="number"
                   step="0.01"
                   min="0"
                   max="1"
-                  value={musicPart.partStart}
-                  onChange={(event) => handlePartChange(musicPart.partId, "partStart", parseFloat((event.target as HTMLInputElement).value))}
+                  value={someLoopPart.partStart}
+                  onChange={(event) => handlePartChange(someLoopPart.partId, "partStart", parseFloat((event.target as HTMLInputElement).value))}
                   class={styles.rangeInput}
                 />
                 <span class={styles.rangeSeparator}>to</span>
@@ -72,15 +90,15 @@ export const App = () => {
                   step="0.01"
                   min="0"
                   max="1"
-                  value={musicPart.partEnd}
-                  onChange={(event) => handlePartChange(musicPart.partId, "partEnd", parseFloat((event.target as HTMLInputElement).value))}
+                  value={someLoopPart.partEnd}
+                  onChange={(event) => handlePartChange(someLoopPart.partId, "partEnd", parseFloat((event.target as HTMLInputElement).value))}
                   class={styles.rangeInput}
                 />
               </div>
             </div>
             <textarea
-              value={musicPart.partSampleSource}
-              onInput={(event) => handlePartChange(musicPart.partId, "partSampleSource", (event.target as HTMLTextAreaElement).value)}
+              value={someLoopPart.partSampleSource}
+              onInput={(event) => handlePartChange(someLoopPart.partId, "partSampleSource", (event.target as HTMLTextAreaElement).value)}
               class={styles.sourceEditor}
               rows={2}
             />
@@ -91,8 +109,10 @@ export const App = () => {
         <button class={styles.playButton} onClick={handlePlayClick}>
           Render & Play Loop
         </button>
+        <button class={styles.stopButton} onClick={handleStopClick}>
+          Stop Loop
+        </button>
       </div>
-      <audio ref={audioRef} />
     </div>
   );
 };
