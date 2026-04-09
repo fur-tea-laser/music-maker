@@ -1,5 +1,3 @@
-import { h, Fragment } from "preact";
-
 export const ClientIndex = ({
   bundleUrl,
   cssUrl,
