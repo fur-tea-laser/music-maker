@@ -4,11 +4,13 @@ export interface LoopPart {
   partEnd: number;
   getPartSample: (timestamp: number, relativeTimestamp: number) => number;
 }
+
 export interface GetLoopWavApi {
   loopParts: Record<number, LoopPart>;
   loopSampleCount: number;
   loopSampleRate: number;
 }
+
 export function getLoopWav({
   loopParts,
   loopSampleCount,
@@ -44,7 +46,7 @@ export function getLoopWav({
       const globalIndex = startIndex + sampleIndex;
       if (globalIndex >= loopSampleCount) break;
       const timestamp = globalIndex / loopSampleRate;
-      const relativeTimestamp = sampleIndex / loopSampleRate;
+      const relativeTimestamp = sampleIndex / partLength;
       partSamples[sampleIndex] = musicPart.getPartSample(timestamp, relativeTimestamp);
     }
     return {
