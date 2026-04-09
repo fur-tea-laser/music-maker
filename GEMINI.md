@@ -34,4 +34,3 @@ interface SomeThing {
 
 minimize error checking unless told explicity to validate/check certain conditions
 
-don't use empty new lines at all, especially in function implementations, except for at the top level between/around declarations

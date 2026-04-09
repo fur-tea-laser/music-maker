@@ -2,6 +2,7 @@
   "version": "5",
   "specifiers": {
     "npm:esbuild-sass-plugin@^3.6.0": "3.7.0_esbuild@0.27.7_sass-embedded@1.99.0",
+    "npm:esbuild-wasm@0.24.2": "0.24.2",
     "npm:esbuild@~0.27.3": "0.27.7",
     "npm:preact-iso@^2.11.1": "2.11.1_preact@10.29.1_preact-render-to-string@6.6.7__preact@10.29.1",
     "npm:preact-render-to-string@^6.5.13": "6.6.7_preact@10.29.1",
@@ -252,6 +253,10 @@
         "sass",
         "sass-embedded"
       ]
+    },
+    "esbuild-wasm@0.24.2": {
+      "integrity": "sha512-03/7Z1gD+ohDnScFztvI4XddTAbKVmMEzCvvkBpQdWKEXJ+73dTyeNrmdxP1Q0zpDMFjzUJwtK4rLjqwiHbzkw==",
+      "bin": true
     },
     "esbuild@0.27.7": {
       "integrity": "sha512-IxpibTjyVnmrIQo5aqNpCgoACA/dTKLTlhMHihVHhdkxKyPO1uBBthumT0rdHmcsk9uMonIWS0m4FljWzILh3w==",
@@ -685,6 +690,7 @@
   "workspace": {
     "dependencies": [
       "npm:esbuild-sass-plugin@^3.6.0",
+      "npm:esbuild-wasm@0.24.2",
       "npm:esbuild@~0.27.3",
       "npm:preact-iso@^2.11.1",
       "npm:preact-render-to-string@^6.5.13",

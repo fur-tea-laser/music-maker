@@ -1,5 +1,6 @@
 import { render } from "preact";
-import { App } from "./components/App.tsx";
+import { MusicLoopApp } from "./components/MusicLoopApp.tsx";
+import "./styles/global.scss"
 
 const root = document.getElementById("app");
-render(<App />, root!);
+render(<MusicLoopApp />, root!);

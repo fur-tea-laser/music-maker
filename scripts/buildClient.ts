@@ -14,12 +14,17 @@ async function buildAdminClient({
   outputDirectoryPath: string
 }) {
   try {
-    await Deno.remove(outputDirectoryPath, { recursive: true });
-  } catch (removeError) {
-    throw removeError
+    const fileInfo = await Deno.stat(outputDirectoryPath);
+    if (fileInfo.isDirectory) {
+      await Deno.remove(outputDirectoryPath, { recursive: true });
+    }
+  } catch (statError) {
+    if (!(statError instanceof Deno.errors.NotFound)) {
+      throw statError;
+    }
   }
   await esbuild.build({
-    entryPoints: ["source/main.tsx"],
+    entryPoints: ["source/main.tsx", "source/audio/renderWorker.ts"],
     bundle: true,
     outdir: outputDirectoryPath,
     minify: true,
@@ -40,6 +45,10 @@ async function buildAdminClient({
     jsxFragment: "Fragment",
     inject: ["./source/preact-shim.ts"],
   });
+  await Deno.copyFile(
+    "node_modules/.deno/esbuild-wasm@0.24.2/node_modules/esbuild-wasm/esbuild.wasm",
+    `${outputDirectoryPath}/esbuild.wasm`
+  );
   const indexHtml = renderToString(
     h(ClientIndex, {
       bundleUrl: "/main.js",
