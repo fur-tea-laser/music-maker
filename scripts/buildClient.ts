@@ -24,7 +24,7 @@ async function buildAdminClient({
     }
   }
   await esbuild.build({
-    entryPoints: ["source/main.tsx", "source/audio/renderWorker.ts"],
+    entryPoints: ["source/main.tsx", "source/audio/loopWavWorker.ts"],
     bundle: true,
     outdir: outputDirectoryPath,
     minify: true,

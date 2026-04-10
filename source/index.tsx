@@ -9,7 +9,7 @@ export const ClientIndex = ({
     <head>
       <meta charSet="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>SPA</title>
+      <title>Looper</title>
       <link rel="stylesheet" href={cssUrl} />
     </head>
     <body>
