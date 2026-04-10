@@ -54,17 +54,34 @@ export function MusicLoopApp() {
   const [isRendering, setIsRendering] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [showSampleRateDropdown, setShowSampleRateDropdown] = useState(false);
+  const [editingFileName, setEditingFileName] = useState<string | null>(null);
+  const [tempFileName, setTempFileName] = useState("");
   const esbuildReadyRef = useRef(false);
   const loopWavWorkerRef = useRef<Worker | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const sampleRateDropdownRef = useRef<HTMLDivElement>(null);
+  const fileNameInputRef = useRef<HTMLInputElement>(null);
 
   const activeFile = projectFiles.find(file => file.fileName === activeFileName) || projectFiles[0];
 
   useEffect(() => {
+    if (editingFileName && fileNameInputRef.current) {
+      fileNameInputRef.current.focus();
+      // @ts-ignore: select() exists on HTMLInputElement
+      fileNameInputRef.current.select();
+    }
+  }, [editingFileName]);
+
+  useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (dropdownRef.current && !dropdownRef.current.contains(target)) {
         setShowDropdown(false);
+      }
+      if (sampleRateDropdownRef.current && !sampleRateDropdownRef.current.contains(target)) {
+        setShowSampleRateDropdown(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -122,14 +139,53 @@ export function MusicLoopApp() {
   };
 
   const handleAddFile = () => {
-    const newName = prompt("Enter file name (e.g. utils.js):");
-    if (newName) {
-      const sanitizedName = newName.endsWith(".js") ? newName : `${newName}.js`;
-      if (!projectFiles.find(f => f.fileName === sanitizedName)) {
-        setProjectFiles(prev => [...prev, { fileName: sanitizedName, fileContent: "" }]);
-        setActiveFileName(sanitizedName);
-      }
+    let baseName = "untitled";
+    let counter = 0;
+    let newName = `${baseName}.js`;
+    
+    while (projectFiles.some(f => f.fileName === newName)) {
+      counter++;
+      newName = `${baseName}_${counter}.js`;
     }
+
+    setProjectFiles(prev => [...prev, { fileName: newName, fileContent: "" }]);
+    setActiveFileName(newName);
+    setEditingFileName(newName);
+    setTempFileName(newName);
+  };
+
+  const handleStartRename = (fileName: string) => {
+    if (fileName === "main.js") return;
+    setEditingFileName(fileName);
+    setTempFileName(fileName);
+  };
+
+  const handleFinishRename = () => {
+    if (!editingFileName) return;
+    
+    const sanitized = tempFileName.trim();
+    if (sanitized === "" || sanitized === editingFileName) {
+      setEditingFileName(null);
+      return;
+    }
+
+    const finalName = sanitized.endsWith(".js") ? sanitized : `${sanitized}.js`;
+
+    if (projectFiles.some(f => f.fileName === finalName && f.fileName !== editingFileName)) {
+      setErrorMessage(`A file named ${finalName} already exists.`);
+      setEditingFileName(null);
+      return;
+    }
+
+    setProjectFiles(prev => prev.map(f => 
+      f.fileName === editingFileName ? { ...f, fileName: finalName } : f
+    ));
+    
+    if (activeFileName === editingFileName) {
+      setActiveFileName(finalName);
+    }
+    
+    setEditingFileName(null);
   };
 
   const handleDeleteFile = (fileName: string) => {
@@ -312,7 +368,7 @@ export function MusicLoopApp() {
     <div className={styles.appContainer}>
       <header className={styles.appHeader}>
         <div className={styles.headerControl}>
-          <label htmlFor="lengthInput">Length (s):</label>
+          <div className={styles.headerLabel}>Length (s)</div>
           <input
             id="lengthInput"
             type="number"
@@ -321,20 +377,36 @@ export function MusicLoopApp() {
             onInput={(event) => setLoopLengthSeconds(Number((event.target as HTMLInputElement).value))}
             min={0.1}
             step={0.1}
+            style={{ width: "60px" }}
           />
         </div>
-        <div className={styles.headerControl}>
-          <label htmlFor="sampleRateSelect">Sample Rate:</label>
-          <select
-            id="sampleRateSelect"
-            className={styles.headerInput}
-            value={sampleRate}
-            onChange={(event) => setSampleRate(Number((event.target as HTMLSelectElement).value))}
+        <div className={styles.externalDropdown} ref={sampleRateDropdownRef}>
+          <div 
+            className={styles.headerControl} 
+            onClick={() => setShowSampleRateDropdown(!showSampleRateDropdown)}
+            style={{ cursor: "pointer" }}
           >
-            <option value={44100}>44.1 kHz</option>
-            <option value={96000}>96 kHz</option>
-            <option value={192000}>192 kHz</option>
-          </select>
+            <div className={styles.headerLabel}>Sample Rate</div>
+            <div className={styles.headerInput}>
+              {sampleRate / 1000} kHz ▾
+            </div>
+          </div>
+          {showSampleRateDropdown && (
+            <div className={styles.dropdownMenu}>
+              {[44100, 96000, 192000].map(rate => (
+                <button
+                  key={rate}
+                  className={`${styles.dropdownItem} ${sampleRate === rate ? styles.dropdownItemActive : ""}`}
+                  onClick={() => {
+                    setSampleRate(rate);
+                    setShowSampleRateDropdown(false);
+                  }}
+                >
+                  {rate / 1000} kHz
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         {errorMessage && <div style={{ color: "#ff8888", fontSize: "12px", maxWidth: "300px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{errorMessage}</div>}
         <div className={styles.playbackControls}>
@@ -400,10 +472,28 @@ export function MusicLoopApp() {
               <div 
                 key={file.fileName} 
                 className={`${styles.fileItem} ${activeFileName === file.fileName ? styles.fileItemActive : ""}`}
-                onClick={() => setActiveFileName(file.fileName)}
+                onClick={() => {
+                  if (editingFileName === file.fileName) return;
+                  setActiveFileName(file.fileName);
+                }}
+                onDblClick={() => handleStartRename(file.fileName)}
               >
-                <span>{file.fileName}</span>
-                {file.fileName !== "main.js" && (
+                {editingFileName === file.fileName ? (
+                  <input
+                    ref={fileNameInputRef}
+                    className={styles.fileNameInput}
+                    value={tempFileName}
+                    onInput={(e) => setTempFileName((e.target as HTMLInputElement).value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleFinishRename();
+                      if (e.key === "Escape") setEditingFileName(null);
+                    }}
+                    onBlur={handleFinishRename}
+                  />
+                ) : (
+                  <span>{file.fileName}</span>
+                )}
+                {file.fileName !== "main.js" && !editingFileName && (
                   <button 
                     className={styles.deleteFileButton} 
                     onClick={(e) => { e.stopPropagation(); handleDeleteFile(file.fileName); }}
