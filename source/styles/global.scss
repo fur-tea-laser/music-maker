@@ -8,3 +8,6 @@ html, body {
 * {
   box-sizing: border-box;
 }
+button, input, select, textarea {
+  font-family: inherit;
+}

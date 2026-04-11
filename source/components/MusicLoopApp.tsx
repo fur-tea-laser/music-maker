@@ -1,13 +1,43 @@
 import { JSX } from "preact";
-import { useState, useEffect, useRef } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import styles from "../styles/MusicLoopApp.module.scss";
 import { playLoop, stopLoop } from "../audio/audioEngine.ts";
 import * as esbuild from "esbuild-wasm";
-import { zipSync, unzipSync, strToU8, strFromU8 } from "fflate";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
+import { WaveformEditor } from "./WaveformEditor.tsx";
 
 interface ProjectFile {
   fileName: string;
   fileContent: string;
+}
+
+interface ProjectSample {
+  sampleName: string;
+  sampleData: ArrayBuffer;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  const chunkSize = 0x8000;
+  for (let i = 0; i < len; i += chunkSize) {
+    binary += String.fromCharCode.apply(
+      null,
+      bytes.subarray(i, i + chunkSize) as unknown as number[],
+    );
+  }
+  return btoa(binary);
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary_string = window.atob(base64);
+  const len = binary_string.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary_string.charCodeAt(i);
+  }
+  return bytes.buffer;
 }
 
 const STORAGE_KEY = "music-loop-project-v1";
@@ -27,52 +57,77 @@ export default function() {
       }
     }
   };
-};`
+};`,
 };
 
 const defaultUtilsFile: ProjectFile = {
   fileName: "utils.js",
   fileContent: `export function getSineWave(timestamp, frequency, amplitude) {
   return amplitude * Math.sin(timestamp * 2 * Math.PI * frequency);
-}`
+}`,
 };
 
 interface SavedProject {
   loopLengthSeconds: number;
   sampleRate: number;
   projectFiles: ProjectFile[];
-  activeFileName: string;
+  projectSamples?: { sampleName: string; sampleData: string }[];
+  activeFileName: string | null;
+  activeSampleName?: string | null;
 }
 
 export function MusicLoopApp() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [loopLengthSeconds, setLoopLengthSeconds] = useState(1);
   const [sampleRate, setSampleRate] = useState(44100);
-  const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([defaultMainFile, defaultUtilsFile]);
-  const [activeFileName, setActiveFileName] = useState<string>("main.js");
+  const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([
+    defaultMainFile,
+    defaultUtilsFile,
+  ]);
+  const [projectSamples, setProjectSamples] = useState<ProjectSample[]>([]);
+  const [activeFileName, setActiveFileName] = useState<string | null>(
+    "main.js",
+  );
+  const [activeSampleName, setActiveSampleName] = useState<string | null>(null);
   const [isBundling, setIsBundling] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
   const [showSampleRateDropdown, setShowSampleRateDropdown] = useState(false);
   const [editingFileName, setEditingFileName] = useState<string | null>(null);
+  const [editingSampleName, setEditingSampleName] = useState<string | null>(
+    null,
+  );
   const [tempFileName, setTempFileName] = useState("");
   const esbuildReadyRef = useRef(false);
   const loopWavWorkerRef = useRef<Worker | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const sampleInputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const sampleRateDropdownRef = useRef<HTMLDivElement>(null);
   const fileNameInputRef = useRef<HTMLInputElement>(null);
 
-  const activeFile = projectFiles.find(file => file.fileName === activeFileName) || projectFiles[0];
+  const activeFile =
+    projectFiles.find((file) => file.fileName === activeFileName) ||
+    projectFiles[0];
+  const activeSample =
+    projectSamples.find((sample) => sample.sampleName === activeSampleName) ||
+    null;
 
   useEffect(() => {
-    if (editingFileName && fileNameInputRef.current) {
-      fileNameInputRef.current.focus();
-      // @ts-ignore: select() exists on HTMLInputElement
-      fileNameInputRef.current.select();
+    if ((editingFileName || editingSampleName) && fileNameInputRef.current) {
+      const input = fileNameInputRef.current;
+      input.focus();
+      const value = input.value;
+      const lastDotIndex = value.lastIndexOf(".");
+      if (lastDotIndex > 0) {
+        input.setSelectionRange(0, lastDotIndex);
+      } else {
+        // @ts-ignore: select() exists on HTMLInputElement
+        input.select();
+      }
     }
-  }, [editingFileName]);
+  }, [editingFileName, editingSampleName]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -80,7 +135,10 @@ export function MusicLoopApp() {
       if (dropdownRef.current && !dropdownRef.current.contains(target)) {
         setShowDropdown(false);
       }
-      if (sampleRateDropdownRef.current && !sampleRateDropdownRef.current.contains(target)) {
+      if (
+        sampleRateDropdownRef.current &&
+        !sampleRateDropdownRef.current.contains(target)
+      ) {
         setShowSampleRateDropdown(false);
       }
     };
@@ -96,7 +154,16 @@ export function MusicLoopApp() {
         setLoopLengthSeconds(parsed.loopLengthSeconds);
         setSampleRate(parsed.sampleRate);
         setProjectFiles(parsed.projectFiles);
+        if (parsed.projectSamples) {
+          setProjectSamples(parsed.projectSamples.map((ps) => ({
+            sampleName: ps.sampleName,
+            sampleData: base64ToArrayBuffer(ps.sampleData),
+          })));
+        }
         setActiveFileName(parsed.activeFileName);
+        if (parsed.activeSampleName) {
+          setActiveSampleName(parsed.activeSampleName);
+        }
       } catch (e) {
         console.error("Failed to load project from localStorage", e);
       }
@@ -115,7 +182,10 @@ export function MusicLoopApp() {
       }
     };
     initializeEsbuild();
-    loopWavWorkerRef.current = new Worker(new URL("./audio/loopWavWorker.js", import.meta.url), { type: "module" });
+    loopWavWorkerRef.current = new Worker(
+      new URL("./audio/loopWavWorker.js", import.meta.url),
+      { type: "module" },
+    );
     return () => {
       loopWavWorkerRef.current?.terminate();
     };
@@ -128,30 +198,106 @@ export function MusicLoopApp() {
       sampleRate,
       projectFiles,
       activeFileName,
+      activeSampleName,
     };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(projectToSave));
-  }, [loopLengthSeconds, sampleRate, projectFiles, activeFileName, isLoaded]);
+    try {
+      projectToSave.projectSamples = projectSamples.map((ps) => ({
+        sampleName: ps.sampleName,
+        sampleData: arrayBufferToBase64(ps.sampleData),
+      }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(projectToSave));
+    } catch (e) {
+      console.warn("Storage quota exceeded or error saving samples", e);
+      // Fallback: save without samples if quota exceeded
+      delete projectToSave.projectSamples;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(projectToSave));
+    }
+  }, [
+    loopLengthSeconds,
+    sampleRate,
+    projectFiles,
+    projectSamples,
+    activeFileName,
+    activeSampleName,
+    isLoaded,
+  ]);
 
   const handleUpdateFileContent = (content: string) => {
-    setProjectFiles(prev => prev.map(file => 
-      file.fileName === activeFileName ? { ...file, fileContent: content } : file
-    ));
+    setProjectFiles((prev) =>
+      prev.map((file) =>
+        file.fileName === activeFileName
+          ? { ...file, fileContent: content }
+          : file
+      )
+    );
   };
 
   const handleAddFile = () => {
     let baseName = "untitled";
     let counter = 0;
     let newName = `${baseName}.js`;
-    
-    while (projectFiles.some(f => f.fileName === newName)) {
+
+    while (projectFiles.some((f) => f.fileName === newName)) {
       counter++;
       newName = `${baseName}_${counter}.js`;
     }
 
-    setProjectFiles(prev => [...prev, { fileName: newName, fileContent: "" }]);
+    setProjectFiles(
+      (prev) => [...prev, { fileName: newName, fileContent: "" }],
+    );
     setActiveFileName(newName);
+    setActiveSampleName(null);
     setEditingFileName(newName);
     setTempFileName(newName);
+  };
+
+  const handleAddSample = (event: Event) => {
+    const input = event.target as HTMLInputElement;
+    if (!input.files || input.files.length === 0) return;
+    const file = input.files[0];
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = e.target?.result;
+      if (result instanceof ArrayBuffer) {
+        let newName = file.name;
+        let counter = 0;
+        while (projectSamples.some((s) => s.sampleName === newName)) {
+          counter++;
+          const nameParts = file.name.split(".");
+          const ext = nameParts.length > 1 ? `.${nameParts.pop()}` : "";
+          newName = `${nameParts.join(".")}_${counter}${ext}`;
+        }
+        setProjectSamples(
+          (prev) => [...prev, { sampleName: newName, sampleData: result }],
+        );
+        setActiveSampleName(newName);
+        setActiveFileName(null);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    input.value = "";
+  };
+
+  const handleCropSample = (sampleName: string, newBuffer: ArrayBuffer) => {
+    setProjectSamples((prev) =>
+      prev.map((s) =>
+        s.sampleName === sampleName ? { ...s, sampleData: newBuffer } : s
+      )
+    );
+  };
+
+  const handleDeleteSample = (sampleName: string) => {
+    if (confirm(`Delete ${sampleName}?`)) {
+      setProjectSamples((prev) =>
+        prev.filter((s) => s.sampleName !== sampleName)
+      );
+      if (activeSampleName === sampleName) {
+        setActiveSampleName(null);
+        if (projectFiles.length > 0) {
+          setActiveFileName(projectFiles[0].fileName);
+        }
+      }
+    }
   };
 
   const handleStartRename = (fileName: string) => {
@@ -162,7 +308,7 @@ export function MusicLoopApp() {
 
   const handleFinishRename = () => {
     if (!editingFileName) return;
-    
+
     const sanitized = tempFileName.trim();
     if (sanitized === "" || sanitized === editingFileName) {
       setEditingFileName(null);
@@ -171,34 +317,104 @@ export function MusicLoopApp() {
 
     const finalName = sanitized.endsWith(".js") ? sanitized : `${sanitized}.js`;
 
-    if (projectFiles.some(f => f.fileName === finalName && f.fileName !== editingFileName)) {
+    if (
+      projectFiles.some((f) =>
+        f.fileName === finalName && f.fileName !== editingFileName
+      )
+    ) {
       setErrorMessage(`A file named ${finalName} already exists.`);
       setEditingFileName(null);
       return;
     }
 
-    setProjectFiles(prev => prev.map(f => 
-      f.fileName === editingFileName ? { ...f, fileName: finalName } : f
-    ));
-    
+    setProjectFiles((prev) =>
+      prev.map((f) =>
+        f.fileName === editingFileName ? { ...f, fileName: finalName } : f
+      )
+    );
+
     if (activeFileName === editingFileName) {
       setActiveFileName(finalName);
     }
-    
+
     setEditingFileName(null);
+  };
+
+  const handleStartRenameSample = (sampleName: string) => {
+    setEditingSampleName(sampleName);
+    setTempFileName(sampleName);
+  };
+
+  const handleFinishRenameSample = () => {
+    if (!editingSampleName) return;
+
+    const sanitized = tempFileName.trim();
+    if (sanitized === "" || sanitized === editingSampleName) {
+      setEditingSampleName(null);
+      return;
+    }
+
+    const finalName = sanitized.endsWith(".wav") ? sanitized : `${sanitized}.wav`;
+
+    if (
+      projectSamples.some((s) =>
+        s.sampleName === finalName && s.sampleName !== editingSampleName
+      )
+    ) {
+      setErrorMessage(`A sample named ${finalName} already exists.`);
+      setEditingSampleName(null);
+      return;
+    }
+
+    setProjectSamples((prev) =>
+      prev.map((s) =>
+        s.sampleName === editingSampleName ? { ...s, sampleName: finalName } : s
+      )
+    );
+
+    if (activeSampleName === editingSampleName) {
+      setActiveSampleName(finalName);
+    }
+
+    setEditingSampleName(null);
+  };
+
+  const handleDuplicateSample = (sampleName: string) => {
+    const sample = projectSamples.find((s) => s.sampleName === sampleName);
+    if (!sample) return;
+
+    const nameParts = sampleName.split(".");
+    const ext = nameParts.length > 1 ? `.${nameParts.pop()}` : ".wav";
+    const baseName = nameParts.join(".");
+
+    let newName = `${baseName}_copy${ext}`;
+    let counter = 0;
+    while (projectSamples.some((s) => s.sampleName === newName)) {
+      counter++;
+      newName = `${baseName}_copy_${counter}${ext}`;
+    }
+
+    setProjectSamples((prev) => [
+      ...prev,
+      { sampleName: newName, sampleData: sample.sampleData.slice(0) },
+    ]);
+    setActiveSampleName(newName);
+    setActiveFileName(null);
   };
 
   const handleDeleteFile = (fileName: string) => {
     if (fileName === "main.js") return;
     if (confirm(`Delete ${fileName}?`)) {
-      setProjectFiles(prev => prev.filter(f => f.fileName !== fileName));
+      setProjectFiles((prev) => prev.filter((f) => f.fileName !== fileName));
       if (activeFileName === fileName) {
         setActiveFileName("main.js");
       }
     }
   };
 
-  const handleRenderLoop = async (onRenderComplete: (wavBuffer: ArrayBuffer) => void) => {
+  const handleRenderLoop = async (
+    onRenderComplete: (wavBuffer: ArrayBuffer) => void,
+  ) => {
     if (!esbuildReadyRef.current || !loopWavWorkerRef.current) {
       setErrorMessage("System not ready. Please wait.");
       return;
@@ -210,23 +426,26 @@ export function MusicLoopApp() {
       const plugin: esbuild.Plugin = {
         name: "virtual-fs",
         setup(build) {
-          build.onResolve({ filter: /.*/ }, args => {
+          build.onResolve({ filter: /.*/ }, (args) => {
             if (args.path.startsWith("./")) {
-              return { path: args.path.replace("./", ""), namespace: "virtual" };
+              return {
+                path: args.path.replace("./", ""),
+                namespace: "virtual",
+              };
             }
-            if (projectFiles.find(f => f.fileName === args.path)) {
+            if (projectFiles.find((f) => f.fileName === args.path)) {
               return { path: args.path, namespace: "virtual" };
             }
             return null;
           });
-          build.onLoad({ filter: /.*/, namespace: "virtual" }, args => {
-            const file = projectFiles.find(f => f.fileName === args.path);
+          build.onLoad({ filter: /.*/, namespace: "virtual" }, (args) => {
+            const file = projectFiles.find((f) => f.fileName === args.path);
             if (file) {
               return { contents: file.fileContent, loader: "js" };
             }
             return null;
           });
-        }
+        },
       };
 
       const buildResult = await esbuild.build({
@@ -260,7 +479,13 @@ export function MusicLoopApp() {
       });
     } catch (bundleError) {
       setIsBundling(false);
-      setErrorMessage(`Bundle Error: ${bundleError instanceof Error ? bundleError.message : String(bundleError)}`);
+      setErrorMessage(
+        `Bundle Error: ${
+          bundleError instanceof Error
+            ? bundleError.message
+            : String(bundleError)
+        }`,
+      );
     }
   };
 
@@ -292,13 +517,21 @@ export function MusicLoopApp() {
       loopLengthSeconds,
       sampleRate,
       activeFileName,
+      activeSampleName,
     };
     archiveData["project.json"] = strToU8(JSON.stringify(metadata));
     for (const file of projectFiles) {
-      archiveData[file.fileName] = strToU8(file.fileContent);
+      archiveData[`code/${file.fileName}`] = strToU8(file.fileContent);
+    }
+    for (const sample of projectSamples) {
+      archiveData[`samples/${sample.sampleName}`] = new Uint8Array(
+        sample.sampleData,
+      );
     }
     const zipped = zipSync(archiveData);
-    const blob = new Blob([zipped as Uint8Array<ArrayBuffer>], { type: "application/zip" });
+    const blob = new Blob([zipped as Uint8Array<ArrayBuffer>], {
+      type: "application/zip",
+    });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -324,17 +557,33 @@ export function MusicLoopApp() {
           }
           const metadata = JSON.parse(strFromU8(projectJsonBytes));
           const newFiles: ProjectFile[] = [];
+          const newSamples: ProjectSample[] = [];
           for (const [fileName, fileBytes] of Object.entries(unzipped)) {
             if (fileName === "project.json") continue;
-            newFiles.push({
-              fileName,
-              fileContent: strFromU8(fileBytes),
-            });
+            if (fileName.startsWith("samples/")) {
+              newSamples.push({
+                sampleName: fileName.replace("samples/", ""),
+                sampleData: fileBytes.slice(0).buffer,
+              });
+            } else {
+              const name = fileName.startsWith("code/")
+                ? fileName.replace("code/", "")
+                : fileName;
+              newFiles.push({
+                fileName: name,
+                fileContent: strFromU8(fileBytes),
+              });
+            }
           }
           setLoopLengthSeconds(metadata.loopLengthSeconds);
           setSampleRate(metadata.sampleRate);
           setProjectFiles(newFiles);
-          setActiveFileName(metadata.activeFileName || "main.js");
+          setProjectSamples(newSamples);
+          setActiveFileName(
+            metadata.activeFileName ||
+              (newFiles.length > 0 ? newFiles[0].fileName : null),
+          );
+          setActiveSampleName(metadata.activeSampleName || null);
           setErrorMessage(null);
         } catch (error) {
           console.error("Failed to load archive", error);
@@ -346,16 +595,23 @@ export function MusicLoopApp() {
     input.value = "";
   };
 
-  const handleKeyDown = (event: JSX.TargetedKeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (
+    event: JSX.TargetedKeyboardEvent<HTMLTextAreaElement>,
+  ) => {
     if (event.key === "Tab") {
       event.preventDefault();
       const textarea = event.currentTarget;
       const { selectionStart, selectionEnd, value } = textarea;
-      const newValue = value.substring(0, selectionStart) + "  " + value.substring(selectionEnd);
-      
-      setProjectFiles(prev => prev.map(file => 
-        file.fileName === activeFileName ? { ...file, fileContent: newValue } : file
-      ));
+      const newValue = value.substring(0, selectionStart) + "  " +
+        value.substring(selectionEnd);
+
+      setProjectFiles((prev) =>
+        prev.map((file) =>
+          file.fileName === activeFileName
+            ? { ...file, fileContent: newValue }
+            : file
+        )
+      );
 
       // Re-set selection after state update
       setTimeout(() => {
@@ -374,15 +630,18 @@ export function MusicLoopApp() {
             type="number"
             className={styles.headerInput}
             value={loopLengthSeconds}
-            onInput={(event) => setLoopLengthSeconds(Number((event.target as HTMLInputElement).value))}
+            onInput={(event) =>
+              setLoopLengthSeconds(
+                Number((event.target as HTMLInputElement).value),
+              )}
             min={0.1}
             step={0.1}
             style={{ width: "60px" }}
           />
         </div>
         <div className={styles.externalDropdown} ref={sampleRateDropdownRef}>
-          <div 
-            className={styles.headerControl} 
+          <div
+            className={styles.headerControl}
             onClick={() => setShowSampleRateDropdown(!showSampleRateDropdown)}
             style={{ cursor: "pointer" }}
           >
@@ -393,10 +652,12 @@ export function MusicLoopApp() {
           </div>
           {showSampleRateDropdown && (
             <div className={styles.dropdownMenu}>
-              {[44100, 96000, 192000].map(rate => (
+              {[44100, 96000, 192000].map((rate) => (
                 <button
                   key={rate}
-                  className={`${styles.dropdownItem} ${sampleRate === rate ? styles.dropdownItemActive : ""}`}
+                  className={`${styles.dropdownItem} ${
+                    sampleRate === rate ? styles.dropdownItemActive : ""
+                  }`}
                   onClick={() => {
                     setSampleRate(rate);
                     setShowSampleRateDropdown(false);
@@ -408,7 +669,20 @@ export function MusicLoopApp() {
             </div>
           )}
         </div>
-        {errorMessage && <div style={{ color: "#ff8888", fontSize: "12px", maxWidth: "300px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{errorMessage}</div>}
+        {errorMessage && (
+          <div
+            style={{
+              color: "#ff8888",
+              fontSize: "12px",
+              maxWidth: "300px",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {errorMessage}
+          </div>
+        )}
         <div className={styles.playbackControls}>
           <button
             className={styles.playbackButton}
@@ -417,11 +691,13 @@ export function MusicLoopApp() {
           >
             {isBundling ? "Bundling..." : isRendering ? "Rendering..." : "Loop"}
           </button>
-          <button className={styles.playbackButton} onClick={handleStopLoop}>Stop</button>
-          
+          <button className={styles.playbackButton} onClick={handleStopLoop}>
+            Stop
+          </button>
+
           <div className={styles.externalDropdown} ref={dropdownRef}>
-            <button 
-              className={styles.playbackButton} 
+            <button
+              className={styles.playbackButton}
               onClick={() => setShowDropdown(!showDropdown)}
               style={{ marginLeft: "10px" }}
             >
@@ -429,22 +705,31 @@ export function MusicLoopApp() {
             </button>
             {showDropdown && (
               <div className={styles.dropdownMenu}>
-                <button 
-                  className={styles.dropdownItem} 
-                  onClick={() => { handleDownloadLoop(); setShowDropdown(false); }}
+                <button
+                  className={styles.dropdownItem}
+                  onClick={() => {
+                    handleDownloadLoop();
+                    setShowDropdown(false);
+                  }}
                   disabled={isBundling || isRendering}
                 >
                   Download WAV
                 </button>
-                <button 
-                  className={styles.dropdownItem} 
-                  onClick={() => { handleArchiveProject(); setShowDropdown(false); }}
+                <button
+                  className={styles.dropdownItem}
+                  onClick={() => {
+                    handleArchiveProject();
+                    setShowDropdown(false);
+                  }}
                 >
                   Download Archive
                 </button>
-                <button 
-                  className={styles.dropdownItem} 
-                  onClick={() => { fileInputRef.current?.click(); setShowDropdown(false); }}
+                <button
+                  className={styles.dropdownItem}
+                  onClick={() => {
+                    fileInputRef.current?.click();
+                    setShowDropdown(false);
+                  }}
                 >
                   Load Archive
                 </button>
@@ -463,56 +748,162 @@ export function MusicLoopApp() {
       </header>
       <main className={styles.appBody}>
         <aside className={styles.fileExplorer}>
-          <div className={styles.explorerHeader}>
-            Files
-            <button className={styles.addFileButton} onClick={handleAddFile}>+</button>
+          <div className={styles.explorerSection}>
+            <div className={styles.explorerHeader}>
+              Code
+              <button className={styles.addFileButton} onClick={handleAddFile}>
+                +
+              </button>
+            </div>
+            <div className={styles.fileList}>
+              {projectFiles.map((file) => (
+                <div
+                  key={file.fileName}
+                  className={`${styles.fileItem} ${
+                    activeFileName === file.fileName
+                      ? styles.fileItemActive
+                      : ""
+                  }`}
+                  onClick={() => {
+                    if (editingFileName === file.fileName) return;
+                    setActiveFileName(file.fileName);
+                    setActiveSampleName(null);
+                  }}
+                  onDblClick={() => handleStartRename(file.fileName)}
+                >
+                  {editingFileName === file.fileName
+                    ? (
+                      <input
+                        ref={fileNameInputRef}
+                        className={styles.fileNameInput}
+                        value={tempFileName}
+                        onInput={(e) =>
+                          setTempFileName((e.target as HTMLInputElement).value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleFinishRename();
+                          if (e.key === "Escape") setEditingFileName(null);
+                        }}
+                        onBlur={handleFinishRename}
+                      />
+                    )
+                    : <span>{file.fileName}</span>}
+                  {file.fileName !== "main.js" && !editingFileName && (
+                    <button
+                      className={styles.deleteFileButton}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteFile(file.fileName);
+                      }}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
-          <div className={styles.fileList}>
-            {projectFiles.map(file => (
-              <div 
-                key={file.fileName} 
-                className={`${styles.fileItem} ${activeFileName === file.fileName ? styles.fileItemActive : ""}`}
-                onClick={() => {
-                  if (editingFileName === file.fileName) return;
-                  setActiveFileName(file.fileName);
-                }}
-                onDblClick={() => handleStartRename(file.fileName)}
+          <div className={styles.explorerSection}>
+            <div className={styles.explorerHeader}>
+              Samples
+              <button
+                className={styles.addFileButton}
+                onClick={() => sampleInputRef.current?.click()}
               >
-                {editingFileName === file.fileName ? (
-                  <input
-                    ref={fileNameInputRef}
-                    className={styles.fileNameInput}
-                    value={tempFileName}
-                    onInput={(e) => setTempFileName((e.target as HTMLInputElement).value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleFinishRename();
-                      if (e.key === "Escape") setEditingFileName(null);
-                    }}
-                    onBlur={handleFinishRename}
-                  />
-                ) : (
-                  <span>{file.fileName}</span>
-                )}
-                {file.fileName !== "main.js" && !editingFileName && (
-                  <button 
-                    className={styles.deleteFileButton} 
-                    onClick={(e) => { e.stopPropagation(); handleDeleteFile(file.fileName); }}
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-            ))}
+                +
+              </button>
+              <input
+                type="file"
+                ref={sampleInputRef}
+                style={{ display: "none" }}
+                accept=".wav"
+                onChange={handleAddSample}
+              />
+            </div>
+            <div className={styles.fileList}>
+              {projectSamples.map((sample) => (
+                <div
+                  key={sample.sampleName}
+                  className={`${styles.fileItem} ${
+                    activeSampleName === sample.sampleName
+                      ? styles.fileItemActive
+                      : ""
+                  }`}
+                  onClick={() => {
+                    if (editingSampleName === sample.sampleName) return;
+                    setActiveSampleName(sample.sampleName);
+                    setActiveFileName(null);
+                  }}
+                  onDblClick={() => handleStartRenameSample(sample.sampleName)}
+                >
+                  {editingSampleName === sample.sampleName
+                    ? (
+                      <input
+                        ref={fileNameInputRef}
+                        className={styles.fileNameInput}
+                        value={tempFileName}
+                        onInput={(e) =>
+                          setTempFileName((e.target as HTMLInputElement).value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleFinishRenameSample();
+                          if (e.key === "Escape") setEditingSampleName(null);
+                        }}
+                        onBlur={handleFinishRenameSample}
+                      />
+                    )
+                    : (
+                      <>
+                        <span>{sample.sampleName}</span>
+                        <div className={styles.itemActions}>
+                          <button
+                            className={styles.actionButton}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDuplicateSample(sample.sampleName);
+                            }}
+                            title="Duplicate"
+                          >
+                            ⧉
+                          </button>
+                          <button
+                            className={styles.deleteFileButton}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteSample(sample.sampleName);
+                            }}
+                            title="Delete"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </>
+                    )}
+                </div>
+              ))}
+            </div>
           </div>
         </aside>
         <div className={styles.editorContainer}>
-          <textarea
-            className={styles.scriptEditor}
-            value={activeFile?.fileContent || ""}
-            onInput={(event) => handleUpdateFileContent((event.target as HTMLTextAreaElement).value)}
-            onKeyDown={handleKeyDown}
-            spellcheck={false}
-          />
+          {activeSampleName && activeSample
+            ? (
+              <WaveformEditor
+                sampleName={activeSample.sampleName}
+                sampleData={activeSample.sampleData}
+                onCrop={(newBuffer) =>
+                  handleCropSample(activeSample.sampleName, newBuffer)}
+              />
+            )
+            : (
+              <textarea
+                className={styles.scriptEditor}
+                value={activeFile?.fileContent || ""}
+                onInput={(event) =>
+                  handleUpdateFileContent(
+                    (event.target as HTMLTextAreaElement).value,
+                  )}
+                onKeyDown={handleKeyDown}
+                spellcheck={false}
+              />
+            )}
         </div>
       </main>
     </div>
