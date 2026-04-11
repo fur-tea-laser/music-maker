@@ -2,7 +2,7 @@ export interface LoopPart {
   partId: number;
   partStart: number;
   partEnd: number;
-  getPartSample: (timestamp: number, relativeTimestamp: number) => number;
+  getPartSample: (timestamp: number, relativeTimestamp: number, localTimestamp: number, globalRelativeTimestamp: number, partRelativeDuration: number) => number;
 }
 
 export interface GetLoopWavApi {
@@ -41,13 +41,17 @@ export function getLoopWav({
     const startIndex = Math.floor(musicPart.partStart * loopSampleCount);
     const endIndex = Math.floor(musicPart.partEnd * loopSampleCount);
     const partLength = Math.max(0, endIndex - startIndex);
+    const partRelativeDuration = partLength / loopSampleCount;
     const partSamples = new Float32Array(partLength);
     for (let sampleIndex = 0; sampleIndex < partLength; sampleIndex++) {
       const globalIndex = startIndex + sampleIndex;
       if (globalIndex >= loopSampleCount) break;
       const timestamp = globalIndex / loopSampleRate;
       const relativeTimestamp = sampleIndex / partLength;
-      partSamples[sampleIndex] = musicPart.getPartSample(timestamp, relativeTimestamp);
+      const partStartTimestamp = startIndex / loopSampleRate;
+      const localTimestamp = timestamp - partStartTimestamp;
+      const globalRelativeTimestamp = globalIndex / loopSampleCount;
+      partSamples[sampleIndex] = musicPart.getPartSample(timestamp, relativeTimestamp, localTimestamp, globalRelativeTimestamp, partRelativeDuration);
     }
     return {
       partSamples,

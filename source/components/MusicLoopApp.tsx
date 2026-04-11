@@ -52,7 +52,7 @@ export default function() {
       partId: 1,
       partStart: 0,
       partEnd: 1,
-      getPartSample: (timestamp, relativeTimestamp) => {
+      getPartSample: (timestamp, relativeTimestamp, localTimestamp, globalRelativeTimestamp, partRelativeDuration) => {
         return getSineWave(timestamp, 440, 0.5);
       }
     }
@@ -354,7 +354,9 @@ export function MusicLoopApp() {
       return;
     }
 
-    const finalName = sanitized.endsWith(".wav") ? sanitized : `${sanitized}.wav`;
+    const finalName = sanitized.endsWith(".wav")
+      ? sanitized
+      : `${sanitized}.wav`;
 
     if (
       projectSamples.some((s) =>
@@ -460,6 +462,28 @@ export function MusicLoopApp() {
 
       setIsBundling(false);
       setIsRendering(true);
+
+      const decodedSamples: Record<string, Float32Array> = {};
+      if (projectSamples.length > 0) {
+        const audioCtx = new window.AudioContext({ sampleRate });
+        try {
+          await Promise.all(projectSamples.map(async (sample) => {
+            try {
+              const bufferCopy = sample.sampleData.slice(0);
+              const audioBuffer = await audioCtx.decodeAudioData(bufferCopy);
+              decodedSamples[sample.sampleName] = audioBuffer.getChannelData(0);
+            } catch (err) {
+              console.error(
+                `Failed to decode sample ${sample.sampleName}`,
+                err,
+              );
+            }
+          }));
+        } finally {
+          audioCtx.close();
+        }
+      }
+
       loopWavWorkerRef.current.onmessage = (event) => {
         setIsRendering(false);
         if (event.data.renderError) {
@@ -476,6 +500,7 @@ export function MusicLoopApp() {
         scriptContent: bundleCode,
         loopLengthSeconds: loopLengthSeconds,
         sampleRate: sampleRate,
+        samples: decodedSamples,
       });
     } catch (bundleError) {
       setIsBundling(false);
